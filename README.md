@@ -34,6 +34,18 @@ Deletion requires confirmation and permanently removes the selected files from t
 
 The application checks its local records and previously prepared GIF variants before uploading again. Different crops and framing settings produce different animations. Changes made by another application can invalidate local records. Use **Refresh** to check occupied slots.
 
+## Live system monitor
+
+Use **Add system monitor** to insert a live monitoring page into the playlist, select the measurements, then press **Upload & play**. **Monitor seconds** controls how long the page stays visible before the next playlist item. A playlist containing only the monitor keeps it active.
+
+- Windows supplies CPU and RAM usage.
+- GPU 3D usage is read from available Windows performance counters.
+- CPU/GPU temperatures require a running LibreHardwareMonitor or OpenHardwareMonitor WMI provider. Unavailable readings show **N/A**. Temperature entries show the maximum matching CPU/GPU sensor reading.
+
+The default **Graphic monitor background with live values** option uses colored static frames and live text. It uploads a small reusable JPEG background to one JPG slot. Sensor updates use the LCD text overlay. The colored rings are decorative frames. A plain three-line monitoring mode is also available by disabling this option.
+
+Updates are scheduled approximately every two seconds after the previous sensor/LCD operation finishes. The application must remain running for live updates.
+
 ## Keep the playlist after restarting Windows
 
 The playlist, crop settings, prepared GIFs, and upload records are stored under `%LOCALAPPDATA%\RyujinLCD`.
@@ -44,9 +56,9 @@ Closing the window during playback minimizes the player to the system tray. Use 
 
 ## Hardware and beta status
 
-Development used an ASUS ROG Ryujin III 360 with USB ID `0B05:1AA2` and firmware `AURJ2-S750-0108`. The upload routine checks that firmware string. Compatibility with White, EVA, Extreme, other USB IDs, and other firmware versions has not been established.
+The current compatibility target is the standard ASUS ROG Ryujin III 360. The [compatibility reference](COMPATIBILITY.md) lists the shared USB product identifiers and protocol firmware requirements used by the application. Compatibility with White, EVA, Extreme and other variants has not been established.
 
-Upload and playback were exercised on the development device. UI actions, framing calculations, persistence, storage-table parsing, and selected HID response variants received local checks. The latest storage-management flow and Windows restart/startup flow still need end-to-end hardware validation.
+Upload and playback were exercised on the development device. UI actions, framing calculations, persistence, storage-table parsing, selected HID response variants, native Windows sensor sampling, and monitoring packet construction received local checks. The latest graphical text placement, storage-management flow and Windows restart/startup flow still need end-to-end hardware validation.
 
 Close the Armoury Crate Ryujin device page and other Ryujin-control applications if HID replies time out. Include the full error text, USB ID, firmware, and steps when reporting an issue. Review screenshots for personal information before posting them.
 
@@ -60,7 +72,7 @@ powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File .\build.ps1
 
 The executable is written to `dist\Ryujin-LCD-Player.exe`. FFmpeg is installed separately.
 
-The source entry points are `Launcher.cs`, `Ryujin-Player.ps1`, `Ryujin-Storage.ps1`, and `Ryujin-Usb.ps1`. `app.manifest` requests administrator privileges for USB access.
+The source entry points are `Launcher.cs`, `Ryujin-Player.ps1`, `Ryujin-Storage.ps1`, `Ryujin-Sensors.ps1`, and `Ryujin-Usb.ps1`. `Ryujin-Dashboard.jpg` is the graphic monitor background. `app.manifest` requests administrator privileges for USB access.
 
 ## Credits and license
 
@@ -75,3 +87,5 @@ MIT License. See [LICENSE](LICENSE).
 Releases bolumunden EXE'yi indir, FFmpeg'i kur ve uygulamayi yonetici olarak ac. **Add MP4 / GIF** ile dosya ekle, listeden sec ve **Upload & play** dugmesine bas. **Fill** modundaki kaydiricilarla kadraji ayarlayabilirsin.
 
 **LCD storage...** cihazdaki dolu yuvalari ve bos alani gosterir. Eski dosyalari LCD'de goruntuleyerek tanimlayabilir, onay vererek silebilirsin. Silme kalicidir. Windows girisinde devam etmek icin acilis kutusunu isaretle. Bu surum betadir.
+
+**Add system monitor** ile canli izleme ekleyebilirsin. Grafik arka plan secenegi renkli sabit cerceveler ve canli degerler kullanir. CPU/GPU sicakliklari icin WMI sensor saglayicisi gerekir. Okunamayan degerler N/A gorunur.

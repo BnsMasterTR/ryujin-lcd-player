@@ -169,7 +169,7 @@ public static class RyujinLcd {
                         throw new IOException("LCD rejected deletion.");
                     if (ParseStorage(ReadDisk(hid)).Items.Exists(item => item.Kind == kind && item.Slot == slot))
                         throw new IOException("LCD did not confirm deletion of " + kind + " slot " + slot);
-                    if (kind == "GIF") SaveSlot("", slot);
+                    SaveSlot(kind == "GIF" ? "" : "JPG:", slot);
                 }
             }
         });
@@ -182,8 +182,10 @@ public static class RyujinLcd {
         return Task.Run(() => {
             using (var file = Open(hidPath))
             using (var hid = new HidConnection(file)) {
+                Command(hid, 0x5D, 0x5D, 0, 1, 4, 0, (byte)slot, 5);
                 Command(hid, 0x60, 0x60, 0, 1, 0x10, (byte)slot);
                 Command(hid, 0x51, 0x51, 0x1F);
+                VerifyWallpaperMode(hid);
             }
         });
     }
@@ -210,7 +212,11 @@ public static class RyujinLcd {
     }
 
     public static System.Threading.Tasks.Task<int> UploadAsync(string hidPath, string usbPath, byte[] gif) {
-        return System.Threading.Tasks.Task.Run(() => Upload(hidPath, usbPath, gif));
+        return System.Threading.Tasks.Task.Run(() => Upload(hidPath, usbPath, gif, false));
+    }
+
+    public static Task<int> UploadWallpaperAsync(string hidPath, string usbPath, byte[] jpg) {
+        return Task.Run(() => Upload(hidPath, usbPath, jpg, true));
     }
 
     public static System.Threading.Tasks.Task PlayAsync(string hidPath, int slot) {
@@ -225,6 +231,92 @@ public static class RyujinLcd {
                     throw new IOException("LCD did not report the requested GIF slot.");
             }
         });
+    }
+
+    public static byte[][] MonitorReports(string[] labels, string[] values, bool initialize) {
+        if (labels == null || values == null || labels.Length != 3 || values.Length != 3)
+            throw new ArgumentException("The LCD monitor uses three lines.");
+        var reports = new List<byte[]>();
+        if (initialize) {
+            reports.Add(new byte[] { 0x52,0x82,2,2,2,12,26,57,0,255,255,255,0,255,255,255,0,255,255,255 });
+        }
+        for (int line = 0; line < 3; line++) {
+            byte[] label = System.Text.Encoding.ASCII.GetBytes(labels[line]);
+            byte[] value = System.Text.Encoding.UTF8.GetBytes(values[line]);
+            if (label.Length > 18 || value.Length > 40) throw new ArgumentException("LCD text is too long.");
+            var command = new byte[21 + value.Length];
+            command[0] = 0x53; command[1] = (byte)line;
+            Array.Copy(label,0,command,2,label.Length);
+            Array.Copy(value,0,command,20,value.Length);
+            reports.Add(command);
+        }
+        if (initialize) {
+            var commit = new byte[25];
+            commit[0]=0x52; commit[1]=2; commit[2]=2; commit[3]=2; commit[4]=2;
+            commit[5]=12; commit[6]=26; commit[7]=57;
+            for (int i=8;i<commit.Length;i++) commit[i]=255;
+            reports.Add(commit);
+            reports.Add(new byte[] { 0x51,0x21 });
+        }
+        return reports.ToArray();
+    }
+
+    public static Task MonitorAsync(string hidPath, string[] labels, string[] values, bool initialize) {
+        var commands = MonitorReports(labels, values, initialize);
+        return Task.Run(() => {
+            using (var file = Open(hidPath))
+            using (var hid = new HidConnection(file))
+                foreach (var command in commands) Command(hid, command[0], command);
+        });
+    }
+
+    public static byte[][] DashboardReports(int slot, string[] labels, string[] values, bool initialize) {
+        if (slot < 0 || slot >= 10 || labels.Length != 3 || values.Length != 3)
+            throw new ArgumentException("Invalid dashboard data.");
+        var commands = new List<byte[]>();
+        if (initialize) {
+            commands.Add(new byte[] {0x5D,0,1,4,0,(byte)slot,5});
+            commands.Add(new byte[] {0x60,0,1,0x10,(byte)slot});
+        }
+        int[] xs = {45,45,200,200,24,258};
+        int[] ys = {76,105,76,105,184,184};
+        for (int line = 0; line < 6; line++) {
+            if (!initialize && line % 2 == 0) continue;
+            int metric = line / 2;
+            string text = line % 2 == 0 ? labels[metric] : values[metric];
+            var content = System.Text.Encoding.UTF8.GetBytes(text);
+            if (content.Length > 45) throw new ArgumentException("Dashboard text too long.");
+            var report = new byte[15 + content.Length];
+            report[0]=0x60; report[1]=0; report[2]=2; report[3]=(byte)line;
+            report[4]=1; report[5]=0;
+            report[6]=236; report[7]=244; report[8]=255; report[9]=255;
+            report[10]=(byte)xs[line]; report[11]=(byte)(xs[line]>>8);
+            report[12]=(byte)ys[line]; report[13]=0;
+            Array.Copy(content,0,report,14,content.Length);
+            commands.Add(report);
+        }
+        if (initialize) commands.Add(new byte[] {0x51,0x1F});
+        return commands.ToArray();
+    }
+
+    public static Task DashboardAsync(string hidPath, int slot, string[] labels, string[] values, bool initialize) {
+        var reports = DashboardReports(slot,labels,values,initialize);
+        return Task.Run(() => {
+            using(var file=Open(hidPath))
+            using(var hid=new HidConnection(file)) {
+                foreach(var report in reports) Command(hid,report[0],report);
+                VerifyWallpaperMode(hid);
+            }
+        });
+    }
+
+    static void VerifyWallpaperMode(HidConnection hid) {
+        for (int attempt=0;attempt<3;attempt++) {
+            System.Threading.Thread.Sleep(250);
+            var current=Command(hid,0x50,0xD0);
+            if (current.Length>=8 && current[5]==0x1F) return;
+        }
+        throw new IOException("The LCD did not confirm wallpaper display mode. Another controller may have selected a different screen.");
     }
     static string CachePath {
         get {
@@ -254,7 +346,8 @@ public static class RyujinLcd {
         if (File.Exists(CachePath)) {
             foreach (string line in File.ReadAllLines(CachePath)) {
                 string[] fields = line.Split('\t');
-                if (fields.Length == 2 && fields[0] != hash && fields[1] != slot.ToString())
+                if (fields.Length == 2 && fields[0] != hash &&
+                    (fields[1] != slot.ToString() || fields[0].StartsWith("JPG:") != hash.StartsWith("JPG:")))
                     lines.Add(line);
             }
         }
@@ -262,7 +355,7 @@ public static class RyujinLcd {
         File.WriteAllLines(CachePath, lines.ToArray());
     }
 
-    static int Upload(string hidPath, string usbPath, byte[] gif) {
+    static int Upload(string hidPath, string usbPath, byte[] gif, bool wallpaper) {
         using (var usbFile = Open(usbPath))
         using (var hidFile = Open(hidPath))
         using (var hid = new HidConnection(hidFile)) {
@@ -281,8 +374,8 @@ public static class RyujinLcd {
                 var disk = ReadDisk(hid);
                 if (disk[2] != 0 || disk[3] != 1 || disk[22] != 16)
                     throw new IOException("Unexpected disk table or insufficient space.");
-                uint occupied = BitConverter.ToUInt32(disk, 23);
-                string hash = Hash(gif);
+                uint occupied = BitConverter.ToUInt32(disk, wallpaper ? 18 : 23);
+                string hash = (wallpaper ? "JPG:" : "") + Hash(gif);
                 int cached = CachedSlot(hash, occupied);
                 if (cached >= 0) return cached;
                 if (gif.Length < 13) throw new IOException("Invalid GIF file.");
@@ -299,8 +392,8 @@ public static class RyujinLcd {
                     throw new IOException(String.Format(
                         "Not enough LCD storage: GIF {0:F2} MB, free {1:F2} MB. Open Storage to review and delete old items.",
                         needed / 1048576.0, free / 1048576.0));
-                if (slot == 10) throw new IOException("All GIF slots are occupied. Open LCD storage to review and delete selected old items.");
-                Command(hid, 0x72, 0x72, 1, 2, (byte)slot);
+                if (slot == 10) throw new IOException("No empty media slot. Open LCD storage to review old GIF/JPG files.");
+                Command(hid, 0x72, 0x72, 1, wallpaper ? (byte)1 : (byte)2, (byte)slot);
                 Exception uploadFailure = null;
                 try {
                     Command(hid, 0x73, 0x73, 1);

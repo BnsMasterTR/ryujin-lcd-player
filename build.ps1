@@ -10,7 +10,7 @@ $arguments = @(
     ('/win32manifest:' + (Join-Path $PSScriptRoot 'app.manifest')),
     ('/out:' + $output)
 )
-foreach ($name in @('Ryujin-Player.ps1','Ryujin-Usb.ps1','Ryujin-Storage.ps1')) {
+foreach ($name in @('Ryujin-Player.ps1','Ryujin-Usb.ps1','Ryujin-Storage.ps1','Ryujin-Sensors.ps1','Ryujin-Dashboard.jpg')) {
     $arguments += '/resource:' + (Join-Path $PSScriptRoot $name) + ',' + $name
 }
 $arguments += Join-Path $PSScriptRoot 'Launcher.cs'

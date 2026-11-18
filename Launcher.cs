@@ -33,6 +33,8 @@ internal static class Launcher
             Extract("Ryujin-Player.ps1", folder);
             Extract("Ryujin-Usb.ps1", folder);
             Extract("Ryujin-Storage.ps1", folder);
+            Extract("Ryujin-Sensors.ps1", folder);
+            Extract("Ryujin-Dashboard.jpg", folder);
             string powerShell = Path.Combine(Environment.SystemDirectory, @"WindowsPowerShell\v1.0\powershell.exe");
             var start = new ProcessStartInfo(powerShell)
             {
@@ -71,7 +73,7 @@ internal static class Launcher
         }
         finally
         {
-            foreach (string name in new[] { "Ryujin-Player.ps1", "Ryujin-Usb.ps1", "Ryujin-Storage.ps1" })
+            foreach (string name in new[] { "Ryujin-Player.ps1", "Ryujin-Usb.ps1", "Ryujin-Storage.ps1", "Ryujin-Sensors.ps1", "Ryujin-Dashboard.jpg" })
             {
                 try { File.Delete(Path.Combine(folder, name)); } catch (IOException) { } catch (UnauthorizedAccessException) { }
             }

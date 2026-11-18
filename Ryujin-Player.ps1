@@ -3,10 +3,11 @@ $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, System.Windows.Forms, System.Drawing
 . (Join-Path $PSScriptRoot 'Ryujin-Usb.ps1')
 . (Join-Path $PSScriptRoot 'Ryujin-Storage.ps1')
+. (Join-Path $PSScriptRoot 'Ryujin-Sensors.ps1')
 
 [xml]$layout = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-        Title="Ryujin LCD" Width="850" Height="680" MinWidth="720" MinHeight="620"
+        Title="Ryujin LCD" Width="900" Height="760" MinWidth="720" MinHeight="690"
         Background="#101727" Foreground="#F1F5FA" FontFamily="Segoe UI"
         WindowStartupLocation="CenterScreen">
   <Window.Resources>
@@ -55,11 +56,25 @@ Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, Sys
     </Grid>
     <WrapPanel Grid.Row="2" Margin="0,16,0,8">
       <Button Name="Choose" Content="Add MP4 / GIF" Background="#DCE6F7" Margin="0,0,8,8"/>
+      <Button Name="AddMonitor" Content="Add system monitor" Background="#DCE6F7" Margin="0,0,8,8"/>
       <Button Name="Toggle" Content="Pause" Margin="0,0,8,8" IsEnabled="False"/>
       <Button Name="Send" Content="Upload &amp; play" Background="#3DE0CB" Margin="0,0,8,8" IsEnabled="False"/>
       <Button Name="Stop" Content="Stop rotation" Background="#DCE6F7" Margin="0,0,0,8" IsEnabled="False"/>
     </WrapPanel>
     <StackPanel Grid.Row="3">
+      <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+        <ComboBox Name="MonitorMode" Width="300" SelectedIndex="0">
+          <ComboBoxItem Content="Monitor: CPU %, RAM %, GPU 3D %"/>
+          <ComboBoxItem Content="Monitor: CPU temp, GPU temp, RAM %"/>
+          <ComboBoxItem Content="Monitor: CPU %, CPU temp, RAM %"/>
+        </ComboBox>
+        <TextBlock Text="Monitor seconds" Foreground="#AFBDD2" VerticalAlignment="Center" Margin="12,0,8,0"/>
+        <TextBox Name="MonitorSeconds" Text="10" Width="55" VerticalContentAlignment="Center"/>
+      </StackPanel>
+      <TextBlock Text="Temperatures use LibreHardwareMonitor / OpenHardwareMonitor WMI. Unavailable sensors show N/A."
+        Foreground="#AFBDD2" TextWrapping="Wrap" FontSize="11" Margin="0,0,0,6"/>
+      <CheckBox Name="GraphicMonitor" Content="Graphic monitor background with live values" IsChecked="True"
+        Foreground="#AFBDD2" Margin="0,2,0,6"/>
       <StackPanel Orientation="Horizontal" Margin="0,8,0,6">
         <TextBlock Text="LCD framing" Foreground="#AFBDD2" VerticalAlignment="Center" Margin="0,0,12,0"/>
         <ComboBox Name="Framing" Width="270" SelectedIndex="1">
@@ -126,10 +141,21 @@ $storageButton = $window.FindName('Storage')
 $state.OpenStorage = $false
 $taskName = 'RyujinLCD-' + [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 $state.Exit = $false
+$addMonitor = $window.FindName('AddMonitor')
+$monitorMode = $window.FindName('MonitorMode')
+$monitorSeconds = $window.FindName('MonitorSeconds')
+$sensors = [RyujinSensors]::new()
+$state.MonitorActive = $false
+$graphicMonitor = $window.FindName('GraphicMonitor')
 
 function Save-Playlist {
     [void][IO.Directory]::CreateDirectory($appData)
-    $data = @{ Files = @($queue.Items | ForEach-Object { $_.Path }); Slots = $state.Slots; Framing = $state.Framing; Crops = $state.Crops }
+    $data = @{
+        Files = @($queue.Items | ForEach-Object { if ($_.Kind -eq 'Monitor') { '@monitor' } else { $_.Path } })
+        Slots = $state.Slots; Framing = $state.Framing; Crops = $state.Crops
+        MonitorMode = $monitorMode.SelectedIndex; MonitorSeconds = $monitorSeconds.Text
+        GraphicMonitor = [bool]$graphicMonitor.IsChecked
+    }
     $temp = Join-Path $appData ('playlist-' + [Guid]::NewGuid() + '.tmp')
     try {
         [IO.File]::WriteAllText($temp, ($data | ConvertTo-Json), [Text.Encoding]::UTF8)
@@ -246,10 +272,14 @@ function Clear-Operation {
     $state.Task = $null
     $state.Temp = $null
     $state.Running = $false
+    $state.MonitorActive = $false
     $state.Stop = $false
     $state.Next = $null
     $choose.IsEnabled = $true
     $framing.IsEnabled = $true
+    $monitorMode.IsEnabled = $true
+    $monitorSeconds.IsEnabled = $true
+    $graphicMonitor.IsEnabled = $true
     Update-Framing
     $up.IsEnabled = $true
     $down.IsEnabled = $true
@@ -294,6 +324,29 @@ function Start-Conversion {
 
 function Start-Item {
     $entry = $queue.Items[$state.Index]
+    $state.MonitorActive = $false
+    if ($entry.Kind -eq 'Monitor') {
+        $seconds = 0
+        if (![int]::TryParse($monitorSeconds.Text, [ref]$seconds) -or $seconds -lt 2 -or $seconds -gt 3600) {
+            throw 'Monitor seconds must be between 2 and 3600.'
+        }
+        $state.MonitorActive = $true
+        $state.MonitorInitialize = $true
+        $state.MonitorUntil = [datetime]::UtcNow.AddSeconds($seconds)
+        $state.Next = $null
+        if ($graphicMonitor.IsChecked) {
+            $state.Phase = 'DashboardPrepare'
+            $state.Task = [RyujinLcd]::UploadWallpaperAsync($state.Hid, $state.Usb,
+                [IO.File]::ReadAllBytes((Join-Path $PSScriptRoot 'Ryujin-Dashboard.jpg')))
+            $status.Text = 'Preparing the graphic LCD background...'
+            return
+        }
+        $state.Phase = 'SensorRead'
+        $state.Task = $sensors.SampleAsync($monitorMode.SelectedIndex)
+        $status.Text = 'Reading live sensors for the LCD...'
+        return
+    }
+    if (!$state.FFmpeg) { $state.FFmpeg = Find-FFmpeg }
     $state.Video = $entry.Path
     $state.Key = Get-MediaKey $entry
     $probe = Join-Path ([IO.Path]::GetDirectoryName($state.FFmpeg)) 'ffprobe.exe'
@@ -364,6 +417,16 @@ $queue.Add_SelectionChanged({
     $cropY.Value = $crop.Y
     $state.LoadingCrop = $false
     if (!$entry) { $placeholder.Visibility = 'Visible'; return }
+    if ($entry.Kind -eq 'Monitor') {
+        $preview.Visibility = $gifPreview.Visibility = 'Collapsed'
+        $placeholder.Visibility = 'Visible'
+        $placeholder.FontSize = 16
+        $placeholder.Text = "Live system monitor" + [Environment]::NewLine +
+            "Three sensor lines on the LCD" + [Environment]::NewLine + "Updated every 2 seconds"
+        return
+    }
+    $placeholder.Text = 'Select an MP4 or GIF'
+    $placeholder.FontSize = 12
     $placeholder.Visibility = 'Collapsed'
     if ([IO.Path]::GetExtension($entry.Path) -eq '.gif') {
         $preview.Visibility = 'Collapsed'
@@ -408,6 +471,15 @@ $choose.Add_Click({
     $status.Text = 'File list saved. Select an item and use Upload & play to show it now.'
 })
 $up.Add_Click({ Move-Selection -1 })
+$addMonitor.Add_Click({
+    $existing = @($queue.Items | Where-Object Kind -eq 'Monitor')
+    if ($existing.Count) { $queue.SelectedItem = $existing[0]; return }
+    if ($queue.Items.Count -ge 10) { $status.Text = 'Remove an item before adding the monitor.'; return }
+    [void]$queue.Items.Add([pscustomobject]@{ Name='Live system monitor'; Kind='Monitor'; Key='@monitor'; Path=$null })
+    $queue.SelectedIndex = $queue.Items.Count - 1
+    $send.IsEnabled = $true
+    Save-Playlist
+})
 $down.Add_Click({ Move-Selection 1 })
 $remove.Add_Click({
     $index = $queue.SelectedIndex
@@ -432,7 +504,6 @@ $send.Add_Click({
         return
     }
     try {
-        $state.FFmpeg = Find-FFmpeg
         $state.Hid = Get-InterfacePath 'HID\VID_0B05&PID_1AA2&MI_01' '4d1e55b2-f16f-11cf-88cb-001111000030'
         $state.Usb = Get-InterfacePath 'USB\VID_0B05&PID_1AA2&MI_00' '53e99217-6a72-4b4f-8385-07c455b7b7a8'
         $state.Index = [Math]::Max(0, $queue.SelectedIndex)
@@ -442,6 +513,10 @@ $send.Add_Click({
         $up.IsEnabled = $down.IsEnabled = $remove.IsEnabled = $false
         $framing.IsEnabled = $false
         $cropControls.IsEnabled = $false
+        $monitorMode.IsEnabled = $false
+        $monitorSeconds.IsEnabled = $false
+        $graphicMonitor.IsEnabled = $false
+        Save-Playlist
         $send.IsEnabled = $false
         $stop.IsEnabled = $true
         Start-Item
@@ -464,7 +539,32 @@ $timer.Add_Tick({
         if ($state.Task -and $state.Task.IsCompleted) {
             $result = $state.Task.GetAwaiter().GetResult()
             $state.Task = $null
-            if ($state.Phase -eq 'Lookup') {
+            if ($state.Phase -eq 'DashboardPrepare') {
+                if (!$state.Stop) {
+                    $state.DashboardSlot = [int]$result
+                    $state.Phase = 'SensorRead'
+                    $state.Task = $sensors.SampleAsync($monitorMode.SelectedIndex)
+                }
+            } elseif ($state.Phase -eq 'SensorRead') {
+                if (!$state.Stop) {
+                    $state.Frame = $result
+                    $state.Phase = 'MonitorWrite'
+                    if ($graphicMonitor.IsChecked) {
+                        $order = if ($monitorMode.SelectedIndex -eq 0) { @(0,2,1) } else { @(0,1,2) }
+                        $labels = [string[]]@($order | ForEach-Object { $result.Labels[$_].Replace('MAX TEMP','TEMP').Replace('3D ','').Replace('USAGE','LOAD') })
+                        $values = [string[]]@($order | ForEach-Object { $result.Values[$_] })
+                        $state.Task = [RyujinLcd]::DashboardAsync($state.Hid, $state.DashboardSlot, $labels, $values, $state.MonitorInitialize)
+                    } else {
+                        $state.Task = [RyujinLcd]::MonitorAsync($state.Hid, $result.Labels, $result.Values, $state.MonitorInitialize)
+                    }
+                }
+            } elseif ($state.Phase -eq 'MonitorWrite') {
+                $state.MonitorInitialize = $false
+                $state.NextSensor = [datetime]::UtcNow.AddSeconds(2)
+                $status.Text = ($state.Frame.Labels[0] + ' ' + $state.Frame.Values[0] + ' | ' +
+                    $state.Frame.Labels[1] + ' ' + $state.Frame.Values[1] + ' | ' +
+                    $state.Frame.Labels[2] + ' ' + $state.Frame.Values[2])
+            } elseif ($state.Phase -eq 'Lookup') {
                 if (!$state.Stop) {
                     if ([int]$result -ge 0) {
                         $state.Slots[$state.Key] = [int]$result
@@ -495,6 +595,14 @@ $timer.Add_Tick({
                 Move-Item -LiteralPath ($state.Temp + '.partial') -Destination $state.Temp -Force
                 Start-Upload
             }
+        } elseif (!$state.Stop -and $state.MonitorActive -and !$state.Task) {
+            if ($queue.Items.Count -gt 1 -and [datetime]::UtcNow -ge $state.MonitorUntil) {
+                $state.Index = ($state.Index + 1) % $queue.Items.Count
+                Start-Item
+            } elseif ([datetime]::UtcNow -ge $state.NextSensor) {
+                $state.Phase = 'SensorRead'
+                $state.Task = $sensors.SampleAsync($monitorMode.SelectedIndex)
+            }
         } elseif (!$state.Stop -and $state.Next -and [datetime]::UtcNow -ge $state.Next) {
             $state.Next = $null
             $state.Index = ($state.Index + 1) % $queue.Items.Count
@@ -511,7 +619,7 @@ $timer.Add_Tick({
         }
     } catch {
         $message = $_.Exception.GetBaseException().Message
-        if ($message -like 'Not enough LCD storage*' -and
+        if (!$state.MonitorActive -and $message -like 'Not enough LCD storage*' -and
             $state.Attempt + 1 -lt $presets.Count -and !$state.Stop) {
             $state.Task = $null
             $state.Attempt++
@@ -578,6 +686,9 @@ if (!$ValidateOnly) {
     try {
         if (Test-Path -LiteralPath $playlistPath) {
             $saved = Get-Content -LiteralPath $playlistPath -Raw | ConvertFrom-Json
+            if ($null -ne $saved.MonitorMode -and [int]$saved.MonitorMode -in 0,1,2) { $monitorMode.SelectedIndex = [int]$saved.MonitorMode }
+            if ($saved.MonitorSeconds) { $monitorSeconds.Text = [string]$saved.MonitorSeconds }
+            if ($null -ne $saved.GraphicMonitor) { $graphicMonitor.IsChecked = [bool]$saved.GraphicMonitor }
             if ($saved.Framing -in @('Fit','Fill','Stretch')) { $state.Framing = $saved.Framing }
             if ($saved.Crops) {
                 foreach ($property in $saved.Crops.PSObject.Properties) {
@@ -594,6 +705,10 @@ if (!$ValidateOnly) {
                 }
             }
             foreach ($file in $saved.Files) {
+                if ($file -eq '@monitor') {
+                    [void]$queue.Items.Add([pscustomobject]@{Name='Live system monitor';Kind='Monitor';Key='@monitor';Path=$null})
+                    continue
+                }
                 if (!(Test-Path -LiteralPath $file -PathType Leaf)) { continue }
                 if ($queue.Items.Count -ge 10) { break }
                 $media = Get-Item -LiteralPath $file
