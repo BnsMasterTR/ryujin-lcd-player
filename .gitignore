@@ -1,0 +1,10 @@
+/dist/
+*.tmp
+*.partial
+*.user
+.vs/
+ffmpeg.exe
+ffprobe.exe
+playlist.json
+media-slots.tsv
+/prepared/
