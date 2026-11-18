@@ -270,27 +270,33 @@ public static class RyujinLcd {
         });
     }
 
-    public static byte[][] DashboardReports(int slot, string[] labels, string[] values, bool initialize) {
+    public static byte[][] DashboardReports(int slot, string[] labels, string[] values, bool initialize, int digitWidth = 16, int cpuOffset = 0, int gpuOffset = 0) {
         if (slot < 0 || slot >= 10 || labels.Length != 3 || values.Length != 3)
             throw new ArgumentException("Invalid dashboard data.");
         var commands = new List<byte[]>();
+        if (digitWidth < 8 || digitWidth > 32 || Math.Abs(cpuOffset) > 40 || Math.Abs(gpuOffset) > 40)
+            throw new ArgumentOutOfRangeException("Dashboard alignment settings");
         if (initialize) {
             commands.Add(new byte[] {0x5D,0,1,4,0,(byte)slot,5});
             commands.Add(new byte[] {0x60,0,1,0x10,(byte)slot});
         }
-        int[] xs = {45,45,200,200,24,258};
-        int[] ys = {76,105,76,105,184,184};
+        int[] xs = {0,124,0,287,0,298};
+        int[] ys = {0,98,0,98,0,181};
         for (int line = 0; line < 6; line++) {
             if (!initialize && line % 2 == 0) continue;
             int metric = line / 2;
-            string text = line % 2 == 0 ? labels[metric] : values[metric];
+            // Small labels and units are baked into the wallpaper. Keep the device font for short values.
+            string text = line % 2 == 0 ? "" : values[metric].Replace(" C","").TrimEnd('%');
+            int x = xs[line];
+            if (line == 1) x = 78 + cpuOffset + (text.Length * digitWidth) / 2;
+            if (line == 3) x = 241 + gpuOffset + (text.Length * digitWidth) / 2;
             var content = System.Text.Encoding.UTF8.GetBytes(text);
             if (content.Length > 45) throw new ArgumentException("Dashboard text too long.");
             var report = new byte[15 + content.Length];
             report[0]=0x60; report[1]=0; report[2]=2; report[3]=(byte)line;
-            report[4]=1; report[5]=0;
+            report[4]=1; report[5]=1;
             report[6]=236; report[7]=244; report[8]=255; report[9]=255;
-            report[10]=(byte)xs[line]; report[11]=(byte)(xs[line]>>8);
+            report[10]=(byte)x; report[11]=(byte)(x>>8);
             report[12]=(byte)ys[line]; report[13]=0;
             Array.Copy(content,0,report,14,content.Length);
             commands.Add(report);
@@ -299,8 +305,8 @@ public static class RyujinLcd {
         return commands.ToArray();
     }
 
-    public static Task DashboardAsync(string hidPath, int slot, string[] labels, string[] values, bool initialize) {
-        var reports = DashboardReports(slot,labels,values,initialize);
+    public static Task DashboardAsync(string hidPath, int slot, string[] labels, string[] values, bool initialize, int digitWidth, int cpuOffset, int gpuOffset) {
+        var reports = DashboardReports(slot,labels,values,initialize,digitWidth,cpuOffset,gpuOffset);
         return Task.Run(() => {
             using(var file=Open(hidPath))
             using(var hid=new HidConnection(file)) {

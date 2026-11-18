@@ -7,7 +7,7 @@ Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, Sys
 
 [xml]$layout = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-        Title="Ryujin LCD" Width="900" Height="760" MinWidth="720" MinHeight="690"
+        Title="Ryujin LCD v17" Width="900" Height="760" MinWidth="720" MinHeight="690"
         Background="#101727" Foreground="#F1F5FA" FontFamily="Segoe UI"
         WindowStartupLocation="CenterScreen">
   <Window.Resources>
@@ -75,6 +75,17 @@ Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, Sys
         Foreground="#AFBDD2" TextWrapping="Wrap" FontSize="11" Margin="0,0,0,6"/>
       <CheckBox Name="GraphicMonitor" Content="Graphic monitor background with live values" IsChecked="True"
         Foreground="#AFBDD2" Margin="0,2,0,6"/>
+      <WrapPanel Margin="0,2,0,6">
+        <TextBlock Text="LCD digit width" Foreground="#AFBDD2" VerticalAlignment="Center"/>
+        <ComboBox Name="DigitWidth" SelectedIndex="2" Width="58" Margin="8,0,14,0">
+          <ComboBoxItem Content="12"/><ComboBoxItem Content="14"/><ComboBoxItem Content="16"/>
+          <ComboBoxItem Content="18"/><ComboBoxItem Content="20"/><ComboBoxItem Content="24"/><ComboBoxItem Content="32"/>
+        </ComboBox>
+        <TextBlock Text="CPU position" Foreground="#AFBDD2" VerticalAlignment="Center"/>
+        <Slider Name="CpuPosition" Minimum="-40" Maximum="40" Value="0" Width="120" IsSnapToTickEnabled="True" TickFrequency="1" Margin="6,0,12,0"/>
+        <TextBlock Text="GPU position" Foreground="#AFBDD2" VerticalAlignment="Center"/>
+        <Slider Name="GpuPosition" Minimum="-40" Maximum="40" Value="0" Width="120" IsSnapToTickEnabled="True" TickFrequency="1" Margin="6,0,0,0"/>
+      </WrapPanel>
       <StackPanel Orientation="Horizontal" Margin="0,8,0,6">
         <TextBlock Text="LCD framing" Foreground="#AFBDD2" VerticalAlignment="Center" Margin="0,0,12,0"/>
         <ComboBox Name="Framing" Width="270" SelectedIndex="1">
@@ -147,6 +158,9 @@ $monitorSeconds = $window.FindName('MonitorSeconds')
 $sensors = [RyujinSensors]::new()
 $state.MonitorActive = $false
 $graphicMonitor = $window.FindName('GraphicMonitor')
+$digitWidth = $window.FindName('DigitWidth')
+$cpuPosition = $window.FindName('CpuPosition')
+$gpuPosition = $window.FindName('GpuPosition')
 
 function Save-Playlist {
     [void][IO.Directory]::CreateDirectory($appData)
@@ -155,6 +169,9 @@ function Save-Playlist {
         Slots = $state.Slots; Framing = $state.Framing; Crops = $state.Crops
         MonitorMode = $monitorMode.SelectedIndex; MonitorSeconds = $monitorSeconds.Text
         GraphicMonitor = [bool]$graphicMonitor.IsChecked
+        DigitWidth = [int]$digitWidth.SelectedItem.Content
+        CpuPosition = [int]$cpuPosition.Value
+        GpuPosition = [int]$gpuPosition.Value
     }
     $temp = Join-Path $appData ('playlist-' + [Guid]::NewGuid() + '.tmp')
     try {
@@ -335,9 +352,10 @@ function Start-Item {
         $state.MonitorUntil = [datetime]::UtcNow.AddSeconds($seconds)
         $state.Next = $null
         if ($graphicMonitor.IsChecked) {
+            $background = @('Ryujin-Dashboard.jpg','Ryujin-Dashboard-temperature.jpg','Ryujin-Dashboard-mixed.jpg')[$monitorMode.SelectedIndex]
             $state.Phase = 'DashboardPrepare'
             $state.Task = [RyujinLcd]::UploadWallpaperAsync($state.Hid, $state.Usb,
-                [IO.File]::ReadAllBytes((Join-Path $PSScriptRoot 'Ryujin-Dashboard.jpg')))
+                [IO.File]::ReadAllBytes((Join-Path $PSScriptRoot $background)))
             $status.Text = 'Preparing the graphic LCD background...'
             return
         }
@@ -553,7 +571,8 @@ $timer.Add_Tick({
                         $order = if ($monitorMode.SelectedIndex -eq 0) { @(0,2,1) } else { @(0,1,2) }
                         $labels = [string[]]@($order | ForEach-Object { $result.Labels[$_].Replace('MAX TEMP','TEMP').Replace('3D ','').Replace('USAGE','LOAD') })
                         $values = [string[]]@($order | ForEach-Object { $result.Values[$_] })
-                        $state.Task = [RyujinLcd]::DashboardAsync($state.Hid, $state.DashboardSlot, $labels, $values, $state.MonitorInitialize)
+                        $state.Task = [RyujinLcd]::DashboardAsync($state.Hid, $state.DashboardSlot, $labels, $values,
+                            $state.MonitorInitialize, [int]$digitWidth.SelectedItem.Content, [int]$cpuPosition.Value, [int]$gpuPosition.Value)
                     } else {
                         $state.Task = [RyujinLcd]::MonitorAsync($state.Hid, $result.Labels, $result.Values, $state.MonitorInitialize)
                     }
@@ -689,6 +708,11 @@ if (!$ValidateOnly) {
             if ($null -ne $saved.MonitorMode -and [int]$saved.MonitorMode -in 0,1,2) { $monitorMode.SelectedIndex = [int]$saved.MonitorMode }
             if ($saved.MonitorSeconds) { $monitorSeconds.Text = [string]$saved.MonitorSeconds }
             if ($null -ne $saved.GraphicMonitor) { $graphicMonitor.IsChecked = [bool]$saved.GraphicMonitor }
+            if ($saved.DigitWidth -in @(12,14,16,18,20,24,32)) {
+                $digitWidth.SelectedIndex = [array]::IndexOf(@(12,14,16,18,20,24,32), [int]$saved.DigitWidth)
+            }
+            if ($null -ne $saved.CpuPosition) { $cpuPosition.Value = [Math]::Max(-40,[Math]::Min(40,[int]$saved.CpuPosition)) }
+            if ($null -ne $saved.GpuPosition) { $gpuPosition.Value = [Math]::Max(-40,[Math]::Min(40,[int]$saved.GpuPosition)) }
             if ($saved.Framing -in @('Fit','Fill','Stretch')) { $state.Framing = $saved.Framing }
             if ($saved.Crops) {
                 foreach ($property in $saved.Crops.PSObject.Properties) {
@@ -745,6 +769,9 @@ $cropChanged = {
 $cropX.Add_ValueChanged($cropChanged)
 $cropY.Add_ValueChanged($cropChanged)
 $centerCrop.Add_Click({ $cropX.Value = 50; $cropY.Value = 50 })
+$digitWidth.Add_SelectionChanged({ Save-Playlist })
+$cpuPosition.Add_ValueChanged({ Save-Playlist })
+$gpuPosition.Add_ValueChanged({ Save-Playlist })
 if ($ValidateOnly) { $tray.Dispose(); $window.Close(); return }
 $tray.Visible = $true
 if ($AutoStart) {

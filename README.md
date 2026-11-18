@@ -42,9 +42,11 @@ Use **Add system monitor** to insert a live monitoring page into the playlist, s
 - GPU 3D usage is read from available Windows performance counters.
 - CPU/GPU temperatures require a running LibreHardwareMonitor or OpenHardwareMonitor WMI provider. Unavailable readings show **N/A**. Temperature entries show the maximum matching CPU/GPU sensor reading.
 
-The default **Graphic monitor background with live values** option uses colored static frames and live text. It uploads a small reusable JPEG background to one JPG slot. Sensor updates use the LCD text overlay. The colored rings are decorative frames. A plain three-line monitoring mode is also available by disabling this option.
+The default **Graphic monitor background with live values** option uses colored static frames and live numbers. Small labels and units are drawn into the JPEG to accommodate the LCD's fixed text size. Sensor updates replace only the short numeric values. Each measurement preset has its own small reusable JPEG background and uses one JPG slot when first loaded. The colored rings are decorative frames. A plain three-line monitoring mode is also available by disabling this option.
 
 Updates are scheduled approximately every two seconds after the previous sensor/LCD operation finishes. The application must remain running for live updates.
+
+Number positions account for digit count. If the LCD font spacing needs calibration, adjust **LCD digit width** and the **CPU position / GPU position** sliders while watching the display. Changes apply on the next sensor update and are saved locally. The window title identifies this development build as v17.
 
 ## Keep the playlist after restarting Windows
 
